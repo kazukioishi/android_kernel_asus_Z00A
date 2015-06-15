@@ -23,7 +23,7 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
-#include <net/pkt_sched.h>
+#include <uapi/linux/pkt_sched.h>
 #include <net/inet_ecn.h>
 
 #define QUEUE_THRESHOLD 10000

@@ -313,6 +313,11 @@ config NET_SCH_PIE
 
 	  If unsure, say N.
 
+config NET_SCH_FQ_PIE
+	tristate "FQ_PIE"
+	---help---
+	  Say Y here
+
 config NET_SCH_INGRESS
 	tristate "Ingress Qdisc"
 	depends on NET_CLS_ACT
