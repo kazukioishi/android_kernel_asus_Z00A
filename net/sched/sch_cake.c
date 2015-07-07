@@ -113,34 +113,34 @@ struct cake_fqcd_flow {
 
 struct cake_fqcd_sched_data {
     struct cake_fqcd_flow *flows;    /* Flows table [flows_cnt] */
-    u32     *backlogs;  /* backlog table [flows_cnt] */
-	u32		*tags;		/* for set association [flows_cnt] */
-    u32     flows_cnt;  /* number of flows - must be multiple of CAKE_SET_WAYS */
-    u32     perturbation;   /* hash perturbation */
-    u16     quantum;    /* psched_mtu(qdisc_dev(sch)); */
+    u32      *backlogs;  /* backlog table [flows_cnt] */
+	u32		 *tags;		/* for set association [flows_cnt] */
+    u32      flows_cnt;  /* number of flows - must be multiple of CAKE_SET_WAYS */
+    u32      perturbation;   /* hash perturbation */
+    u16      quantum;    /* psched_mtu(qdisc_dev(sch)); */
 
     struct codel_params cparams;
-    u32     drop_overlimit;
-    u32     new_flow_count;
+    u32      drop_overlimit;
+    atomic_t flow_count;
 
     struct list_head new_flows; /* list of new flows */
     struct list_head old_flows; /* list of old flows */
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
-	u64		class_time_next_packet;
-	u32		class_rate_ns;
-	int		class_rate_shft;
-	u32		class_rate_bps;
+	u64		 class_time_next_packet;
+	u32		 class_rate_ns;
+	int		 class_rate_shft;
+	u32		 class_rate_bps;
 
-	u16		class_quantum_prio;
-	u16		class_quantum_band;
-	int		class_deficit;
-	u32		class_backlog;
-	u32		class_dropped;
-	u32		class_ecn_mark;
+	u16		 class_quantum_prio;
+	u16		 class_quantum_band;
+	int		 class_deficit;
+	u32		 class_backlog;
+	u32		 class_dropped;
+	u32		 class_ecn_mark;
 
-	u32		packets;
-	u64		bytes;
+	u32		 packets;
+	u64		 bytes;
 
 	/* moving averages */
 	codel_time_t avge_delay;
@@ -148,10 +148,10 @@ struct cake_fqcd_sched_data {
 	codel_time_t base_delay;
 
 	/* hash function stats */
-	u32		way_directs;
-	u32		way_hits;
-	u32		way_misses;
-	u32		way_collisions;
+	u32		 way_directs;
+	u32		 way_hits;
+	u32		 way_misses;
+	u32		 way_collisions;
 }; /* number of classes is small, so size of this struct doesn't matter much */
 
 struct cake_sched_data {
@@ -164,7 +164,8 @@ struct cake_sched_data {
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64		time_next_packet;
 	u32		rate_ns;
-	int		rate_shft;
+	u16		rate_shft;
+	u16		peel_threshold;
 	u32		rate_bps;
 	u16		rate_flags;
 	short	rate_overhead;
@@ -241,11 +242,11 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		// check if any active queue in the set is reserved for this flow
 		// count the empty queues in the set, too
 		for(i=j=0, k=inner_hash; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS) {
-			if(!q->backlogs[outer_hash + k]) {
-				j++;
-			} else if(q->tags[outer_hash + k] == hash) {
+			if(q->tags[outer_hash + k] == hash) {
 				q->way_hits++;
 				goto found;
+			} else if(list_empty(&q->flows[outer_hash + k].flowchain)) {
+				j++;
 			}
 		}
 
@@ -255,7 +256,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 			q->way_misses++;
 
 			for(i=0; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS)
-				if(!q->backlogs[outer_hash + k])
+				if(list_empty(&q->flows[outer_hash + k].flowchain))
 					goto found;
 		} else {
 			// there are no empty queues
@@ -330,7 +331,18 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	/* Queue is full; find the fat flow and drop a packet. */
 	for(j=0; j < CAKE_MAX_CLASSES; j++) {
 		fqcd = &q->classes[j];
-		for(i=0; i < fqcd->flows_cnt; i++) {
+
+		list_for_each_entry(flow, &fqcd->old_flows, flowchain) {
+			i = flow - fqcd->flows;
+			if(fqcd->backlogs[i] > maxbacklog) {
+				maxbacklog = fqcd->backlogs[i];
+				idx = i;
+				cls = j;
+			}
+		}
+
+		list_for_each_entry(flow, &fqcd->new_flows, flowchain) {
+			i = flow - fqcd->flows;
 			if(fqcd->backlogs[i] > maxbacklog) {
 				maxbacklog = fqcd->backlogs[i];
 				idx = i;
@@ -396,12 +408,9 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		cls = 0;
 	fqcd = &q->classes[cls];
 
-	/* choose flow to insert into, and do so */
+	/* choose flow to insert into */
 	idx = cake_fqcd_hash(fqcd, skb, q->flow_mode);
-
-	codel_set_enqueue_time(skb);
 	flow = &fqcd->flows[idx];
-	flow_queue_add(flow, skb);
 
 	/* ensure shaper state isn't stale */
 	if(!fqcd->class_backlog) {
@@ -414,22 +423,64 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->time_next_packet = now;
 	}
 
-	/* stats */
-	fqcd->packets++;
-	fqcd->bytes         += len;
-	fqcd->backlogs[idx] += len;
-	fqcd->class_backlog += len;
-	sch->qstats.backlog += len;
-	q->buffer_used      += skb->truesize;
+	/*
+	 * Split GSO aggregates if they're likely to impair flow isolation
+	 * or if we need to know individual packet sizes for framing overhead.
+	 */
+	if(unlikely((len * max(atomic_read(&fqcd->flow_count), 1)) > q->peel_threshold && skb_is_gso(skb)))
+	{
+		struct sk_buff *segs, *nskb;
+		netdev_features_t features = netif_skb_features(skb);
+
+		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
+
+		if (IS_ERR_OR_NULL(segs))
+			return qdisc_reshape_fail(skb, sch);
+
+		while (segs) {
+			nskb = segs->next;
+			segs->next = NULL;
+			qdisc_skb_cb(segs)->pkt_len = segs->len;
+
+			codel_set_enqueue_time(segs);
+			flow_queue_add(flow, segs);
+
+			/* stats */
+			sch->q.qlen++;
+			fqcd->packets++;
+			fqcd->bytes         += segs->len;
+			fqcd->backlogs[idx] += segs->len;
+			fqcd->class_backlog += segs->len;
+			sch->qstats.backlog += segs->len;
+			q->buffer_used      += segs->truesize;
+
+			segs = nskb;
+		}
+
+		qdisc_tree_decrease_qlen(sch, 1);
+		consume_skb(skb);
+	} else {
+		/* not splitting */
+		codel_set_enqueue_time(skb);
+		flow_queue_add(flow, skb);
+
+		/* stats */
+		sch->q.qlen++;
+		fqcd->packets++;
+		fqcd->bytes         += len;
+		fqcd->backlogs[idx] += len;
+		fqcd->class_backlog += len;
+		sch->qstats.backlog += len;
+		q->buffer_used      += skb->truesize;
+	}
 
 	/* flowchain */
 	if(list_empty(&flow->flowchain)) {
 		list_add_tail(&flow->flowchain, &fqcd->new_flows);
-		fqcd->new_flow_count++;
+		atomic_inc(&fqcd->flow_count);
 		flow->deficit = fqcd->quantum;
 		flow->dropped = 0;
 	}
-	sch->q.qlen++;
 
 	if(q->buffer_used <= q->buffer_limit) {
 		return NET_XMIT_SUCCESS;
@@ -549,8 +600,9 @@ retry:
 	prev_drop_count = flow->cvars.drop_count;
 	prev_ecn_mark   = flow->cvars.ecn_mark;
 
-	skb = codel_dequeue(sch, &flow->cvars, fqcd->cparams.interval, fqcd->cparams.target,
-						q->buffer_used > (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
+	skb = codel_dequeue(sch, &flow->cvars,
+	                    fqcd->cparams.interval, fqcd->cparams.target, fqcd->cparams.threshold,
+	                    q->buffer_used > (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
 
 	fqcd->class_dropped  += flow->cvars.drop_count - prev_drop_count;
 	fqcd->class_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
@@ -558,11 +610,13 @@ retry:
 	flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
 	if(!skb) {
-		/* codel dropped our packet; try again */
-		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows))
+		/* codel dropped our packet and this queue is empty; try again */
+		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows)) {
 			list_move_tail(&flow->flowchain, &fqcd->old_flows);
-		else
+		} else {
 			list_del_init(&flow->flowchain);
+			atomic_dec(&fqcd->flow_count);
+		}
 		goto begin;
 	}
 
@@ -638,14 +692,10 @@ static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
 	fqcd->cparams.target = max(byte_target_ns, ns_target);
-	fqcd->cparams.interval = max(MS2TIME(100) + fqcd->cparams.target, fqcd->cparams.target * 8);
+	fqcd->cparams.interval = max(MS2TIME(100) + fqcd->cparams.target - ns_target, fqcd->cparams.target * 8);
+	fqcd->cparams.threshold = (fqcd->cparams.target >> 15) * (fqcd->cparams.interval >> 15) * 2;
 
-	if(rate == 0 || rate > 4000000) {
-		fqcd->quantum = 1514;
-	} else {
-		fqcd->quantum = 300;
-	}
-
+	fqcd->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 }
 
 static void cake_config_besteffort(struct Qdisc *sch)
@@ -915,12 +965,14 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 		if(q->buffer_limit < 65536)
 			q->buffer_limit = 65536;
+
+		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : min(65535U, q->rate_bps >> 10);
 	} else {
 		q->buffer_limit = 1 << 20;
+		q->peel_threshold = 0;
 	}
 
-	if(q->buffer_limit > sch->limit * psched_mtu(qdisc_dev(sch)))
-		q->buffer_limit = sch->limit * psched_mtu(qdisc_dev(sch));
+	q->buffer_limit = min(q->buffer_limit, sch->limit * psched_mtu(qdisc_dev(sch)));
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
@@ -1031,6 +1083,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		fqcd->perturbation = prandom_u32();
 		INIT_LIST_HEAD(&fqcd->new_flows);
 		INIT_LIST_HEAD(&fqcd->old_flows);
+		atomic_set(&fqcd->flow_count, 0);
 		/* codel_params_init(&fqcd->cparams); */
 
 		fqcd->flows    = cake_zalloc(fqcd->flows_cnt * sizeof(struct cake_fqcd_flow));

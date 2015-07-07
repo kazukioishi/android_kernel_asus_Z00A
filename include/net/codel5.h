@@ -58,7 +58,7 @@
  * Implemented on linux by Dave Taht and Eric Dumazet
  */
 
-/* Backport some stuff. FIXME: I dont know when these entered 
+/* Backport some stuff. FIXME: I dont know when these entered
    the kernel exactly. */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
 
@@ -92,13 +92,6 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
   sch->qstats.drops++;
 }
 
-/*static inline void kvfree(const void *addr)
-{
-  if (is_vmalloc_addr(addr))
-    vfree(addr);
-  else
-    kfree(addr);
-}*/
 
 #define ktime_get_ns() ktime_to_ns(ktime_get())
 #define codel_stats_copy_queue(a,b,c,d) gnet_stats_copy_queue(a,c)
@@ -150,11 +143,14 @@ static inline u32 codel_time_to_us(codel_time_t val)
 
 /**
  * struct codel_params - contains codel parameters
- * @interval:	width of moving time window
+ * @interval:	initial drop rate
+ * @target:  	maximum persistent sojourn time
+ * @threshold:	tolerance for product of sojourn time and time above target
  */
 struct codel_params {
 	codel_time_t	interval;
 	codel_time_t	target;
+	codel_time_t	threshold;
 };
 
 /**
@@ -271,6 +267,7 @@ static bool codel_should_drop(const struct sk_buff *skb,
 			      struct codel_vars *vars,
 			      codel_time_t interval,
 			      codel_time_t target,
+			      codel_time_t threshold,
 			      codel_time_t now)
 {
 	if (!skb) {
@@ -280,24 +277,24 @@ static bool codel_should_drop(const struct sk_buff *skb,
 
 	sch->qstats.backlog -= qdisc_pkt_len(skb);
 
-	if (now - codel_get_enqueue_time(skb) < target ||
-	    sch->qstats.backlog <= 0) {
+	if (now - codel_get_enqueue_time(skb) < target || !sch->qstats.backlog) {
 		/* went below - stay below for at least interval */
 		vars->first_above_time = 0;
 		return false;
+	} else if (vars->dropping) {
+		return true;
 	}
 
 	if (vars->first_above_time == 0) {
-		/* just went above from below. If we stay above
-		 * for at least current control law we'll say it's ok to drop
-		 */
-		if(vars->count > 1 && now - vars->drop_next < 8 * interval)
-			vars->first_above_time = codel_control_law(
-                                   now, interval, vars->rec_inv_sqrt);
-		else
-			vars->first_above_time = now + interval;
+		/* just went above from below; mark the time */
+		vars->first_above_time = now;
 
-	} else if (now > vars->first_above_time) {
+	} else if (vars->count > 1 && now - vars->drop_next < 8 * interval) {
+		/* we were recently dropping; be more aggressive */
+		return now - vars->first_above_time >
+				codel_control_law(now, interval, vars->rec_inv_sqrt);
+	} else if (((now - vars->first_above_time) >> 15) *
+	           ((now - codel_get_enqueue_time(skb)) >> 15) > threshold) {
 		return true;
 	}
 
@@ -312,6 +309,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				     struct codel_vars *vars,
 				     codel_time_t interval,
 				     codel_time_t target,
+				     codel_time_t threshold,
 				     bool overloaded)
 {
 	struct sk_buff *skb = custom_dequeue(vars, sch);
@@ -323,7 +321,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 		return skb;
 	}
 	now = codel_get_time();
-	drop = codel_should_drop(skb, sch, vars, interval, target, now);
+	drop = codel_should_drop(skb, sch, vars, interval, target, threshold, now);
 	if (vars->dropping) {
 		if (!drop) {
 			/* sojourn time below target - leave dropping state */
@@ -337,9 +335,12 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			 * that the next drop should happen now,
 			 * hence the while loop.
 			 */
-			vars->count++; /* dont care of possible wrap
-					* since there is no more divide
-					*/
+
+			/* saturating increment */
+			vars->count++;
+			if(!vars->count)
+				vars->count--;
+
 			codel_Newton_step(vars);
 			vars->drop_next = codel_control_law(vars->drop_next,
 							    interval,
@@ -356,7 +357,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				qdisc_drop(skb, sch);
 				vars->drop_count++;
 				skb = custom_dequeue(vars, sch);
-				if (skb && !codel_should_drop(skb, sch, vars, interval, target, now)) {
+				if (skb && !codel_should_drop(skb, sch, vars, interval, target, threshold, now)) {
 					/* leave dropping state */
 					vars->dropping = false;
 				} else {
@@ -381,7 +382,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			vars->drop_count++;
 
 			skb = custom_dequeue(vars, sch);
-			drop = codel_should_drop(skb, sch, vars, interval, target, now);
+			drop = codel_should_drop(skb, sch, vars, interval, target, threshold, now);
 			if (skb && INET_ECN_set_ce(skb))
 				vars->ecn_mark++;
 		}
@@ -392,12 +393,9 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 		 */
 		if (vars->count > 2 &&
 		    now - vars->drop_next < 8 * interval) {
-			vars->count -= 2;
-			/* we don't care if rec_inv_sqrt approximation
-			 * is not very precise in reverse:
-			 * Two Newton steps will correct it quadratically.
-			 */
-			codel_Newton_step(vars);
+			/* when count is halved, time interval is multiplied by 1.414... */
+			vars->count /= 2;
+			vars->rec_inv_sqrt = (vars->rec_inv_sqrt * 92682) >> 16;
 		} else {
 			vars->count = 1;
 			vars->rec_inv_sqrt = ~0U >> REC_INV_SQRT_SHIFT;

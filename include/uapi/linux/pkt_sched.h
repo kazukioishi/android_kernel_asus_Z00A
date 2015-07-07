@@ -171,6 +171,10 @@ enum {
 	TCA_TBF_PARMS,
 	TCA_TBF_RTAB,
 	TCA_TBF_PTAB,
+	TCA_TBF_RATE64,
+	TCA_TBF_PRATE64,
+	TCA_TBF_BURST,
+	TCA_TBF_PBURST,
 	__TCA_TBF_MAX,
 };
 
@@ -357,6 +361,8 @@ enum {
 	TCA_HTB_CTAB,
 	TCA_HTB_RTAB,
 	TCA_HTB_DIRECT_QLEN,
+	TCA_HTB_RATE64,
+	TCA_HTB_CEIL64,
 	__TCA_HTB_MAX,
 };
 
@@ -519,6 +525,7 @@ enum {
 	TCA_NETEM_LOSS,
 	TCA_NETEM_RATE,
 	TCA_NETEM_ECN,
+	TCA_NETEM_RATE64,
 	__TCA_NETEM_MAX,
 };
 
@@ -767,6 +774,8 @@ enum {
 
 	TCA_FQ_FLOW_REFILL_DELAY,	/* flow credit refill delay in usec */
 
+	TCA_FQ_ORPHAN_MASK,	/* mask applied to orphaned skb hashes */
+
 	__TCA_FQ_MAX
 };
 
@@ -836,6 +845,7 @@ struct tc_pie_xstats {
 	__u32 maxq;             /* maximum queue size */
 	__u32 ecn_mark;         /* packets marked with ecn*/
 };
+
 /* CAKE */
 enum {
 	TCA_CAKE_UNSPEC,
@@ -869,6 +879,7 @@ struct tc_cake_xstats {
 		__u32 dummy2;
 	} cls[8];
 };
+
 /* FQ_PIE */
 enum {
 	TCA_FQ_PIE_UNSPEC,
