@@ -138,6 +138,7 @@ bool have_governor_per_policy(void)
 {
 	return cpufreq_driver->have_governor_per_policy;
 }
+EXPORT_SYMBOL_GPL(have_governor_per_policy);
 
 static struct cpufreq_policy *__cpufreq_cpu_get(unsigned int cpu, bool sysfs)
 {
@@ -966,6 +967,10 @@ static int __cpufreq_add_dev(struct device *dev, struct subsys_interface *sif,
 
 	if (!policy)
 		goto nomem_out;
+
+    // HACK FIX ME PLEASE!!!
+    extern struct cpufreq_governor cpufreq_gov_ondemand;
+    #define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_ondemand)
 
 	policy->cpu = cpu;
 	policy->governor = CPUFREQ_DEFAULT_GOVERNOR;
