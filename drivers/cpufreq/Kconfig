@@ -68,6 +68,12 @@ config CPU_FREQ_DEFAULT_GOV_BIOSHOCK
 	help
 	  Default governor of BioShock kernel
 
+config CPU_FREQ_DEFAULT_GOV_CONSERVATIVEX
+	bool "conservativex"
+	select CPU_FREQ_GOV_CONSERVATIVEX
+	help
+	A less aggressive version of conservative governor
+
 config CPU_FREQ_DEFAULT_GOV_PERFORMANCE
 	bool "performance"
 	select CPU_FREQ_GOV_PERFORMANCE
@@ -134,6 +140,13 @@ config CPU_FREQ_GOV_BIOSHOCK
 	depends on CPU_FREQ
 	help
 	  'bioshock' - More aggressive version of conservative
+
+config CPU_FREQ_GOV_CONSERVATIVEX
+	tristate "'conservativeX' cpufreq policy governor"
+	depends on CPU_FREQ	
+	default y	
+	help
+	A less aggressive version of conservative governor
 
 config CPU_FREQ_GOV_PERFORMANCE
 	tristate "'performance' governor"
