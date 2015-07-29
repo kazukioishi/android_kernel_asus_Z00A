@@ -14,6 +14,8 @@
  * GNU General Public License for more details.
  *
  * Author: Mike Chan (mike@android.com)
+ * Tweaked by Yank555-lu
+ * Hotplugging implementation by TheSSJ
  *
  */
 
@@ -33,6 +35,13 @@
 #include <linux/slab.h>
 #include <linux/kernel_stat.h>
 #include <asm/cputime.h>
+
+//easy debug switch
+//#define GOVDEBUG
+
+//for adding early suspend and late resume handlers
+#include <linux/earlysuspend.h>
+#include <linux/wait.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/cpufreq_yankactive.h>
@@ -130,6 +139,44 @@ struct cpufreq_yankactive_tunables {
 static struct cpufreq_yankactive_tunables *common_tunables;
 static struct kobject *get_governor_parent_kobj(struct cpufreq_policy *policy);
 static struct attribute_group *get_sysfs_attr(void);
+
+static void __cpuinit early_suspend_offline_cpus(struct early_suspend *h)
+{
+	#ifdef GOVDEBUG
+	printk("entered early_suspend handler in thessjactive");
+	#else
+	unsigned int cpu;
+	for_each_possible_cpu(cpu)
+	{
+		if (cpu<2) //begin offline work at core 3
+			continue;
+		
+		if (cpu_online(cpu) && num_online_cpus() > 2) //get 2 cores down, cores 3 and 4 
+			cpu_down(cpu);
+	}
+	#endif
+}
+
+static void __cpuinit late_resume_online_cpus(struct early_suspend *h)
+{
+	#ifdef GOVDEBUG
+	printk("entered late_resume handler in thessjactive");
+	#else
+	unsigned int cpu;
+	
+	for_each_possible_cpu(cpu)
+	{
+		if (!cpu_online(cpu) && num_online_cpus() < 4) //get all up 
+			cpu_up(cpu);
+	}
+	#endif
+}
+
+static struct early_suspend hotplug_auxcpus_desc __refdata = {
+	.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN,
+	.suspend = early_suspend_offline_cpus,
+	.resume = late_resume_online_cpus,
+};
 
 static inline cputime64_t get_cpu_idle_time_jiffy(unsigned int cpu,
 						  cputime64_t *wall)
@@ -1359,6 +1406,7 @@ static int cpufreq_governor_yankactive(struct cpufreq_policy *policy,
 			idle_notifier_register(&cpufreq_yankactive_idle_nb);
 			cpufreq_register_notifier(&cpufreq_notifier_block,
 					CPUFREQ_TRANSITION_NOTIFIER);
+			register_early_suspend(&hotplug_auxcpus_desc);
 		}
 
 		break;
@@ -1369,6 +1417,7 @@ static int cpufreq_governor_yankactive(struct cpufreq_policy *policy,
 				cpufreq_unregister_notifier(&cpufreq_notifier_block,
 						CPUFREQ_TRANSITION_NOTIFIER);
 				idle_notifier_unregister(&cpufreq_yankactive_idle_nb);
+				unregister_early_suspend(&hotplug_auxcpus_desc);
 			}
 
 			sysfs_remove_group(get_governor_parent_kobj(policy),
@@ -1546,6 +1595,7 @@ static void __exit cpufreq_yankactive_exit(void)
 module_exit(cpufreq_yankactive_exit);
 
 MODULE_AUTHOR("Mike Chan <mike@android.com>");
+MODULE_AUTHOR("Yank555-lu");
 MODULE_DESCRIPTION("'cpufreq_yankactive' - A cpufreq governor for "
 	"Latency sensitive workloads");
 MODULE_LICENSE("GPL");
