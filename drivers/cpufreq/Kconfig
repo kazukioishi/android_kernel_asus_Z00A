@@ -74,6 +74,12 @@ config CPU_FREQ_DEFAULT_GOV_CONSERVATIVEX
 	help
 	A less aggressive version of conservative governor
 
+config CPU_FREQ_DEFAULT_GOV_LIONHEART
+	bool "lionheart"
+	select CPU_FREQ_GOV_LIONHEART
+	help
+	lionheart' - a "smart" optimized governor!
+
 config CPU_FREQ_DEFAULT_GOV_PERFORMANCE
 	bool "performance"
 	select CPU_FREQ_GOV_PERFORMANCE
@@ -147,6 +153,13 @@ config CPU_FREQ_GOV_CONSERVATIVEX
 	default y	
 	help
 	A less aggressive version of conservative governor
+
+config CPU_FREQ_GOV_LIONHEART
+	tristate "'lionheart' cpufreq governor"
+	depends on CPU_FREQ
+	default y
+	help
+	lionheart' - a "smart" optimized governor!
 
 config CPU_FREQ_GOV_PERFORMANCE
 	tristate "'performance' governor"
