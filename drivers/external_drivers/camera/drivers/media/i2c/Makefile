@@ -33,9 +33,9 @@ obj-$(CONFIG_VIDEO_M10MO)    += m10mo_isp.o
 obj-$(CONFIG_VIDEO_M10MO)    += m10mo_spi.o
 
 obj-$(CONFIG_VIDEO_AR0543_RAW)     += ar0543_raw.o
-CFFLAGS_ar0543_raw.o = -Werror
+CFFLAGS_ar0543_raw.o = 
 obj-$(CONFIG_VIDEO_HM2056_RAW) += hm2056_raw.o
-CFFLAGS_hm2056_raw.o = -Werror
+CFFLAGS_hm2056_raw.o = 
 
 obj-$(CONFIG_VIDEO_MSRLIST_HELPER) += libmsrlisthelper.o
 
@@ -54,7 +54,7 @@ obj-$(CONFIG_VIDEO_LM3554) += lm3554.o
 obj-$(CONFIG_VIDEO_LM3559) += lm3559.o
 obj-$(CONFIG_VIDEO_LM3642) += lm3642.o
 
-ccflags-y += -Werror
+ccflags-y += 
 
 # Add cflags to build camera sensor driver for CTP board
 ccflags-$(CONFIG_VIDEO_ATOMISP_CTP) += -DCSS15

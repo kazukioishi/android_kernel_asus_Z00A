@@ -1,4 +1,4 @@
-ccflags-y += -Werror -Wno-unused-function
+ccflags-y += -Wno-unused-function
 
 intel-mid-vibra-objs := intel_mid_vibra.o intel_mid_vibra_acpi.o
 intel-mid-vibra_pf450cl-objs := intel_mid_vibra_me372cl.o intel_mid_vibra_acpi_me372cl.o
