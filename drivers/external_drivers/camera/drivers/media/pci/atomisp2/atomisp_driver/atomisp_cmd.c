@@ -3339,8 +3339,9 @@ int atomisp_set_parameters(struct video_device *vdev,
 	int ret;
 
 	if (asd->stream_env[ATOMISP_INPUT_STREAM_GENERAL].stream == NULL) {
-		dev_err(asd->isp->dev, "%s: internal error!\n", __func__);
-		return -EINVAL;
+		dev_err(asd->isp->dev, "%s: internal error(IGNORE IT)!\n", __func__);
+		//return -EINVAL;
+		return 0;
 	}
 
 	dev_dbg(asd->isp->dev, "%s: set parameter with isp_config_id %d of %s\n",
